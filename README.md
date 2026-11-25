@@ -23,6 +23,10 @@ See `RECIPE.md` for the full description. `NOTICE` lists the Apache-2.0 code der
 
 ## Screenshots
 
+Ticket view: the layers button in the Spaces header groups worktrees by the story they are linked to in the tracker, web and api side by side, above the regular list.
+
+![Ticket groups](screenshots/ticket-groups.png)
+
 ![Plain black](screenshots/black.png)
 
 ![Abstract wallpaper](screenshots/wallpaper-abstract.png)

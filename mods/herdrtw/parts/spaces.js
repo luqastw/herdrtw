@@ -8,7 +8,7 @@
 
 import { View, div, svg } from "gpui-kit";
 import { v_flex, h_flex } from "gpui-base";
-import { spaces, machines, panes, run, openOverlay, exec, hc, theme, shared, setShared, watchFolder, window, layout } from "herdr";
+import { spaces, machines, panes, run, openOverlay, exec, appHome, hc, theme, shared, setShared, watchFolder, window, layout } from "herdr";
 
 
 // The sidebar's rail goes by its width, not a flag: dragging its edge narrows it too.
@@ -80,6 +80,13 @@ export class Spaces {
     this.fold = new Set(JSON.parse(localStorage.getItem("repos.folded") ?? "[]"));
     this.kids = {};
     this.hot = null;
+    this.view = localStorage.getItem("spaces.view") === "ticket" ? "ticket" : "repo";
+    this.tfold = new Set(JSON.parse(localStorage.getItem("tickets.folded") ?? "[]"));
+    this.hub = {};
+    const pairTick = () => { this.loadPairs(cx); cx.timer.after(30000, pairTick); };
+    cx.timer.after(1500, pairTick);
+    const hubTick = () => { this.syncHub(cx); cx.timer.after(300000, hubTick); };
+    cx.timer.after(8000, hubTick);
     this.refreshMachines(cx);
     cx.timer.every(15000, cx => this.refreshMachines(cx));
     // Refresh only when the refs could have changed (see `due`).
@@ -244,6 +251,106 @@ export class Spaces {
     }
   }
 
+  async loadPairs(cx) {
+    try {
+      const home = (await exec("sh", ["-c", "printf %s \"$HOME\""], { timeout: 3000 })).stdout;
+      const r = await exec("cat", [`${home}/.cache/herdrtw/hub-links.json`], { timeout: 3000 });
+      if (r.code !== 0) return;
+      const hub = JSON.parse(r.stdout || "{}");
+      if (JSON.stringify(hub) !== JSON.stringify(this.hub)) { this.hub = hub; cx.notify(); }
+    } catch {}
+  }
+
+  syncHub(cx) {
+    const keys = new Set();
+    for (const g of Object.values(this.git)) {
+      const m = g?.linked && /ba-(\d+)/i.exec(g.branch ?? "");
+      if (m) keys.add(`BA-${m[1]}`);
+    }
+    if (!keys.size || this.hubBusy) return;
+    this.hubBusy = true;
+    cx.spawn(async (cx) => {
+      try { await exec("python3", ["-I", `${appHome()}/mods/herdrtw/lib/hub_links.py`, ...keys], { timeout: 240000 }); await this.loadPairs(cx); } catch {}
+      this.hubBusy = false;
+    });
+  }
+
+  sideOf(g) {
+    const n = String(g?.name ?? "").toLowerCase();
+    return n.endsWith("-web") || n === "web" ? "web" : n.endsWith("-api") || n === "api" ? "api" : g?.name ?? "";
+  }
+
+  ticketOf(r) {
+    if (!r.g?.linked) return null;
+    const m = /ba-(\d+)/i.exec(r.g.branch ?? "") || /ba-(\d+)/i.exec(r.w.name);
+    return m ? `BA-${m[1]}` : null;
+  }
+
+  components() {
+    const up = {};
+    const find = (k) => { while (up[k] && up[k] !== k) k = up[k]; return k; };
+    const join = (a, b) => { a = find(a); b = find(b); if (a !== b) up[b < a ? a : b] = b < a ? b : a; up[a] ??= a; up[b] ??= b; };
+    const types = {}, titles = {};
+    for (const [k, v] of Object.entries(this.hub ?? {})) {
+      up[k] ??= k;
+      types[k] = v.type; titles[k] = v.title;
+      for (const l of v.links ?? []) { up[l.key] ??= l.key; types[l.key] ??= l.type; titles[l.key] ??= l.title; join(k, l.key); }
+    }
+    return { find, types, titles, up };
+  }
+
+  byTicket(rows) {
+    const comp = this.components();
+    const groups = new Map();
+    for (const r of rows) {
+      const t = this.ticketOf(r);
+      if (!t) continue;
+      const root = comp.up[t] ? comp.find(t) : t;
+      if (!groups.has(root)) groups.set(root, []);
+      groups.get(root).push(r);
+    }
+    const members = (root) => Object.keys(comp.up).filter((k) => comp.find(k) === root);
+    const out = [], taken = new Set();
+    const slug = (b) => String(b ?? "").replace(/^[^/]+\//, "").replace(/^ba-\d+-?/i, "").replace(/-/g, " ");
+    let first = true;
+    for (const root of [...groups.keys()].sort()) {
+      const items = groups.get(root);
+      const sides = [...new Set(items.map((r) => this.sideOf(r.g)).filter(Boolean))].sort();
+      if (!(sides.includes("web") && sides.includes("api"))) continue;
+      const all = members(root);
+      const head = all.filter((k) => comp.types[k] === "story").sort()[0] ?? root;
+      const title = comp.titles[head] ?? slug(items[0].g.branch);
+      const key = head;
+      const folded = this.tfold.has(key);
+      out.push({ w: { id: `tk-${key}`, machine: items[0].w.machine }, hdr: { key, title, n: items.length, sides, folded, first } });
+      first = false;
+      items.forEach((r) => taken.add(r.w.id));
+      if (folded) continue;
+      items.sort((a, b) => this.sideOf(a.g).localeCompare(this.sideOf(b.g)) || String(a.g.branch).localeCompare(String(b.g.branch)));
+      items.forEach((r, n) => out.push({ ...r, tree: n === items.length - 1 ? "└─" : "├─", tag: this.sideOf(r.g) }));
+    }
+    if (!out.length) return rows;
+    const rest = rows.filter((r) => !taken.has(r.w.id) && !(r.tree && r.g && this.fold.has(r.g.repo) && !r.w.active));
+    return [...out, { w: { id: "tk-rest", machine: null }, hdr: { label: "Worktrees", first: false } }, ...rest];
+  }
+
+  groupHead(r, t) {
+    if (r.hdr.label) return h_flex().id("tk-rest").h(24).flex_none().mt(18).px(8).items_center().text_size(12).text_color(t.dim).child(r.hdr.label);
+    const { key, title, n, sides, folded, first } = r.hdr;
+    return h_flex().id(`tk-${key}`).h(28).flex_none().mt(first ? 4 : 16).px(8).gap(7).items_center().rounded(6)
+      .text_size(12.5).text_color(t.dim).cursor_pointer().hover((s) => s.bg(t.hover))
+      .on_click((_e, cx) => {
+        folded ? this.tfold.delete(key) : this.tfold.add(key);
+        localStorage.setItem("tickets.folded", JSON.stringify([...this.tfold]));
+        cx.notify();
+      })
+      .child(svg("mods/workspace-chrome/folder.svg").size(13).flex_none())
+      .child(div().flex_none().text_color(t.foreground).child(key))
+      .child(div().flex_1().min_w(0))
+      .child(div().flex_none().child(String(n)))
+      .child(svg(`mods/workspace-chrome/chevron-${folded ? "right" : "down"}.svg`).size(11).flex_none());
+  }
+
   loadPr(key, cx) {
     const g = this.git[key];
     const [on, cwd] = JSON.parse(key);
@@ -331,8 +438,10 @@ export class Spaces {
 
   // The rows, under a header per machine once one isn't this computer.
   grouped(t, collapsed) {
-    const rows = this.ordered().filter((r) => !(r.tree && r.g && this.fold.has(r.g.repo) && !r.w.active));
-    const draw = (r) => (collapsed ? this.compact(r, t) : this.row(r, t));
+    const base = this.ordered();
+    const byTicket = this.view === "ticket" && !collapsed;
+    const rows = byTicket ? this.byTicket(base) : base.filter((r) => !(r.tree && r.g && this.fold.has(r.g.repo) && !r.w.active));
+    const draw = (r) => (r.hdr ? this.groupHead(r, t) : collapsed ? this.compact(r, t) : this.row(r, t));
     const remote = [...new Set([...rows.map(r => r.w.machine).filter(Boolean), ...this.machines.map(m => m.name), ...Object.keys(this.reconnecting)])].sort();
     const loading = m => {
       const layout = machines().find(k => k.name === m)?.layout;
@@ -443,10 +552,10 @@ export class Spaces {
       .when(g.behind > 0, (el) => el.child(div().flex_none().text_color(t.muted).child(`\u2193${g.behind}`)));
   }
 
-  row({ w, i, g, tree }, t) {
+  row({ w, i, g, tree, tag, flat }, t) {
     const on = w.active;
     const kidInfo = g ? this.kids[g.repo] : null;
-    const canFold = !tree && Boolean(kidInfo) && kidInfo.host === w.id && kidInfo.n > 0;
+    const canFold = !flat && !tree && Boolean(kidInfo) && kidInfo.host === w.id && kidInfo.n > 0;
     const isFolded = canFold && this.fold.has(g.repo);
     const fromIndex = this.pressed === null ? -1 : spaces().findIndex(s => s.id === this.pressed);
     return v_flex()
@@ -499,6 +608,7 @@ export class Spaces {
           .gap(9)
           .items_center()
           .when(Boolean(tree), el => el.pl(14).child(this.prDot(g, t)).child(svg("mods/workspace-chrome/branch.svg").size(13).text_color(t.dim)))
+          .when(Boolean(tag), el => el.child(div().flex_none().w(28).text_size(12).text_color(t.muted).child(tag)))
           .when(!tree, el => el.child(h_flex().size(14).flex_none().rounded(4).border(1.5).border_color(on ? t.foreground : t.muted).when(on, (s) => s.bg(t.foreground))))
           .child(div().id(`name-${w.id}`).flex_1().min_w(60).truncate().text_color(t.foreground).when(Boolean(tree && g?.branch), (el) => el.tooltip(this.tip(g))).child(w.name))
           .child(g ? this.gitTail(g, tree, w.name, t) : div())
@@ -577,8 +687,18 @@ export class Spaces {
       .child(h_flex().h(34).pl(16).pr(10).items_center().justify_between().text_size(12.5).text_color(t.dim)
         .when(collapsed, el => el.pl(0).pr(0).justify_center())
         .when(!collapsed, el => el.child("Spaces"))
+        .child(h_flex().gap(2).items_center()
+        .when(!collapsed, el => el.child(div().id("space-view").size(26).flex_none().flex().items_center().justify_center().rounded(6)
+          .text_color(this.view === "ticket" ? t.foreground : t.dim).when(this.view === "ticket", s => s.bg(t.selected))
+          .hover(s => s.bg(t.hover).text_color(t.foreground))
+          .tooltip(this.view === "ticket" ? "Voltar à lista por repositório" : "Agrupar por ticket (web + api)")
+          .on_click((_e, cx) => {
+            this.view = this.view === "ticket" ? "repo" : "ticket";
+            localStorage.setItem("spaces.view", this.view);
+            cx.notify();
+          }).child(svg("mods/workspace-chrome/layers.svg").size(14))))
         .child(div().id("space-new").size(26).flex_none().flex().items_center().justify_center().rounded(6).hover(s => s.bg(t.hover).text_color(t.foreground))
-          .on_click(() => run("space.new")).child(svg("mods/workspace-chrome/plus.svg").size(14))))
+          .on_click(() => run("space.new")).child(svg("mods/workspace-chrome/plus.svg").size(14)))))
       .child(v_flex().id("sp-list").flex_1().min_h(0).px(collapsed ? 0 : 8).pb(14).overflow_y_scroll()
         .on_mouse_up("left", (_e, cx) => { this.pressed = null; cx.notify(); })
         .children(this.grouped(t, collapsed)));
