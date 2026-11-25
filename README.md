@@ -13,7 +13,7 @@ herdr-app do layout.switch '{"name":"herdrtw"}'
 
 The installer copies the layout, the theme and the `herdrtw` and `goto` mods into `~/.config/herdr-app` (or `$HERDR_APP_HOME`), adds the layout's keys to `keys.json` without replacing any you already use, and checks both mods.
 
-Keys (only while the layout is shown): `ctrl-alt-w` opens the new worktree dialog, `ctrl-alt-b` opens the background image dialog, `cmd-shift-o` opens Go to.
+Keys (only while the layout is shown): `ctrl-alt-w` opens the new worktree dialog, `ctrl-alt-b` opens the background image dialog, `cmd-shift-o` (macOS) or `ctrl-alt-o` opens Go to.
 
 **Go to** (`mods/goto`) jumps between your projects and worktrees: grouped by repository, the branch first, git state (`✓` clean, `✎ n` changed, `↑`/`↓` against the remote, `local` without upstream), how long ago you last used each one, and fuzzy search over branch, repo, name and folder. The previous space comes preselected, so `cmd-shift-o` then `Enter` takes you back.
 
