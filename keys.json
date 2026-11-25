@@ -1,6 +1,7 @@
 {
   "layout:herdrtw": {
     "ctrl-alt-w": "herdrtw.worktree",
-    "ctrl-alt-b": "herdrtw.bg"
+    "ctrl-alt-b": "herdrtw.bg",
+    "cmd-shift-o": "mod.open:goto"
   }
 }

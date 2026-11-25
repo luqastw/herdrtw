@@ -12,6 +12,10 @@ for keep in bg.json inherit.json scripts.json; do
 done
 rm -rf "$home/mods/herdrtw"
 mv "$home/mods/.herdrtw.new" "$home/mods/herdrtw"
+rm -rf "$home/mods/.goto.new"
+cp -R "$here/mods/goto" "$home/mods/.goto.new"
+rm -rf "$home/mods/goto"
+mv "$home/mods/.goto.new" "$home/mods/goto"
 merge='
 import json, os, sys
 src, dst = sys.argv[1], sys.argv[2]
@@ -37,4 +41,5 @@ else
   echo "python3 not found: add the \"layout:herdrtw\" section of $here/keys.json to $home/keys.json yourself."
 fi
 herdr-app check "$home/mods/herdrtw"
+herdr-app check "$home/mods/goto"
 echo "Installed. Switch with: herdr-app do layout.switch '{\"name\":\"herdrtw\"}'"

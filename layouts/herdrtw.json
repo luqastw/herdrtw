@@ -169,5 +169,18 @@
     16
   ],
   "terminal_opacity": 0,
-  "toast": "toast-island"
+  "toast": "toast-island",
+  "floating": [
+    {
+      "id": "goto-tracker",
+      "content": {
+        "mod": "goto",
+        "props": {
+          "part": "tracker"
+        }
+      },
+      "edge": "bottom",
+      "align": "end"
+    }
+  ]
 }
